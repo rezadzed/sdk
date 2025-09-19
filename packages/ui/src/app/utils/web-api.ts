@@ -72,6 +72,10 @@ export function disableScroll(): void {
 }
 
 export function enableScroll(): void {
+    if (!document.body.classList.contains(disableScrollClass)) {
+        return;
+    }
+
     document.body.classList.remove(disableScrollClass);
     document.documentElement.scrollTo({ top: -parseFloat(getComputedStyle(document.body).top) });
     document.body.style.top = 'auto';
@@ -84,7 +88,9 @@ export function fixMobileSafariActiveTransition(): void {
 }
 
 export function defineStylesRoot(): void {
-    customElements.define(globalStylesTag, class TcRootElement extends HTMLElement {});
+    if (!customElements.get('tc-root')) {
+        customElements.define(globalStylesTag, class TcRootElement extends HTMLElement {});
+    }
 }
 
 /**

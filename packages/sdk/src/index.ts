@@ -79,6 +79,8 @@ export {
     TonProofItemReplySuccess,
     TonProofItemReplyError,
     ConnectItemReplyError,
+    SessionCrypto,
+    KeyPair,
     CONNECT_ITEM_ERROR_CODES,
     CONNECT_EVENT_ERROR_CODES,
     SEND_TRANSACTION_ERROR_CODES,
@@ -87,3 +89,4 @@ export {
 export { toUserFriendlyAddress } from './utils/address';
 export { checkRequiredWalletFeatures } from './utils/feature-support';
 export { isTelegramUrl, encodeTelegramUrlParameters } from './utils/url';
+export { enableQaMode, isQaModeEnabled } from './utils/qa-mode';

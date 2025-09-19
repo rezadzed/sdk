@@ -12,49 +12,39 @@ import {
 import { InjectedProvider } from 'src/provider/injected/injected-provider';
 import { logError } from 'src/utils/log';
 import { FALLBACK_WALLETS_LIST } from 'src/resources/fallback-wallets-list';
+import { isQaModeEnabled } from './utils/qa-mode';
 
 export class WalletsListManager {
-    private walletsListCache: Promise<WalletInfo[]> | null = null;
+    private walletsListDTOCache: Promise<WalletInfoDTO[]> | null = null;
 
-    private walletsListCacheCreationTimestamp: number | null = null;
+    private walletsListDTOCacheCreationTimestamp: number | null = null;
 
     private readonly cacheTTLMs: number | undefined;
 
     private readonly walletsListSource: string;
 
-    constructor(options?: {
-        walletsListSource?: string;
-        cacheTTLMs?: number;
-    }) {
-        this.walletsListSource =
-            options?.walletsListSource ??
-            'https://raw.githubusercontent.com/ton-blockchain/wallets-list/main/wallets-v2.json';
+    constructor(options?: { walletsListSource?: string; cacheTTLMs?: number }) {
+        if (isQaModeEnabled()) {
+            this.walletsListSource =
+                'https://raw.githubusercontent.com/ton-connect/wallets-list-staging/refs/heads/main/wallets-v2.json';
+        } else {
+            this.walletsListSource =
+                options?.walletsListSource ?? 'https://config.ton.org/wallets-v2.json';
+        }
 
         this.cacheTTLMs = options?.cacheTTLMs;
     }
 
     public async getWallets(): Promise<WalletInfo[]> {
-        if (
-            this.cacheTTLMs &&
-            this.walletsListCacheCreationTimestamp &&
-            Date.now() > this.walletsListCacheCreationTimestamp + this.cacheTTLMs
-        ) {
-            this.walletsListCache = null;
-        }
+        const [walletsListDTO, currentlyInjectedWallets] = await Promise.all([
+            this.fetchWalletsListDTO(),
+            this.getCurrentlyInjectedWallets()
+        ]);
 
-        if (!this.walletsListCache) {
-            this.walletsListCache = this.fetchWalletsList();
-            this.walletsListCache
-                .then(() => {
-                    this.walletsListCacheCreationTimestamp = Date.now();
-                })
-                .catch(() => {
-                    this.walletsListCache = null;
-                    this.walletsListCacheCreationTimestamp = null;
-                });
-        }
-
-        return this.walletsListCache;
+        return this.mergeWalletsLists(
+            this.walletConfigDTOListToWalletConfigList(walletsListDTO),
+            currentlyInjectedWallets
+        );
     }
 
     public async getEmbeddedWallet(): Promise<WalletInfoCurrentlyEmbedded | null> {
@@ -63,7 +53,31 @@ export class WalletsListManager {
         return embeddedWallets.length === 1 ? embeddedWallets[0]! : null;
     }
 
-    private async fetchWalletsList(): Promise<WalletInfo[]> {
+    private async fetchWalletsListDTO(): Promise<WalletInfoDTO[]> {
+        if (
+            this.cacheTTLMs &&
+            this.walletsListDTOCacheCreationTimestamp &&
+            Date.now() > this.walletsListDTOCacheCreationTimestamp + this.cacheTTLMs
+        ) {
+            this.walletsListDTOCache = null;
+        }
+
+        if (!this.walletsListDTOCache) {
+            this.walletsListDTOCache = this.fetchWalletsListFromSource();
+            this.walletsListDTOCache
+                .then(() => {
+                    this.walletsListDTOCacheCreationTimestamp = Date.now();
+                })
+                .catch(() => {
+                    this.walletsListDTOCache = null;
+                    this.walletsListDTOCacheCreationTimestamp = null;
+                });
+        }
+
+        return this.walletsListDTOCache;
+    }
+
+    private async fetchWalletsListFromSource(): Promise<WalletInfoDTO[]> {
         let walletsList: WalletInfoDTO[] = [];
 
         try {
@@ -95,17 +109,20 @@ export class WalletsListManager {
             walletsList = FALLBACK_WALLETS_LIST;
         }
 
-        let currentlyInjectedWallets: WalletInfoCurrentlyInjected[] = [];
-        try {
-            currentlyInjectedWallets = InjectedProvider.getCurrentlyInjectedWallets();
-        } catch (e) {
-            logError(e);
+        return walletsList;
+    }
+
+    private getCurrentlyInjectedWallets(): WalletInfoCurrentlyInjected[] {
+        if (!isQaModeEnabled()) {
+            return [];
         }
 
-        return this.mergeWalletsLists(
-            this.walletConfigDTOListToWalletConfigList(walletsList),
-            currentlyInjectedWallets
-        );
+        try {
+            return InjectedProvider.getCurrentlyInjectedWallets();
+        } catch (e) {
+            logError(e);
+            return [];
+        }
     }
 
     private walletConfigDTOListToWalletConfigList(walletConfigDTO: WalletInfoDTO[]): WalletInfo[] {
@@ -136,6 +153,7 @@ export class WalletsListManager {
                         InjectedProvider.isInsideWalletBrowser(jsBridgeKey);
                 }
             });
+
             return walletConfig as WalletInfo;
         });
     }

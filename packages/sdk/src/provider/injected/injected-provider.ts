@@ -3,7 +3,6 @@ import {
     AppRequest,
     ConnectEventError,
     ConnectRequest,
-    Feature,
     RpcMethod,
     WalletEvent,
     WalletResponse
@@ -16,7 +15,7 @@ import { InternalProvider } from 'src/provider/provider';
 import { BridgeConnectionStorage } from 'src/storage/bridge-connection-storage';
 import { IStorage } from 'src/storage/models/storage.interface';
 import { WithoutId, WithoutIdDistributive } from 'src/utils/types';
-import { getWindow, tryGetWindowKeys } from 'src/utils/web-api';
+import { getWindow, getWindowEntries } from 'src/utils/web-api';
 import { PROTOCOL_VERSION } from 'src/resources/protocol';
 import { WalletInfoCurrentlyInjected } from 'src/models';
 import { logDebug } from 'src/utils/log';
@@ -53,10 +52,11 @@ export class InjectedProvider<T extends string = string> implements InternalProv
             return [];
         }
 
-        const windowKeys = tryGetWindowKeys();
-        const wallets = windowKeys.filter(([_, value]) =>
-            isJSBridgeWithMetadata(value)
-        ) as unknown as [string, { tonconnect: InjectedWalletApi }][];
+        const windowEntries = getWindowEntries();
+        const wallets = windowEntries.filter(([_key, value]) => isJSBridgeWithMetadata(value)) as [
+            string,
+            { tonconnect: InjectedWalletApi }
+        ][];
 
         return wallets.map(([jsBridgeKey, wallet]) => ({
             name: wallet.tonconnect.walletInfo.name,
@@ -96,7 +96,10 @@ export class InjectedProvider<T extends string = string> implements InternalProv
 
     private listeners: Array<(e: WithoutIdDistributive<WalletEvent>) => void> = [];
 
-    constructor(storage: IStorage, private readonly injectedWalletKey: T) {
+    constructor(
+        storage: IStorage,
+        private readonly injectedWalletKey: T
+    ) {
         const window: Window | undefined | WindowWithTon<T> = InjectedProvider.window;
         if (!InjectedProvider.isWindowContainsWallet(window, injectedWalletKey)) {
             throw new WalletNotInjectedError();

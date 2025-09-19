@@ -16,7 +16,8 @@ import {
     TonConnectError,
     Wallet,
     WalletInfo,
-    WalletNotSupportFeatureError
+    WalletNotSupportFeatureError,
+    SessionCrypto
 } from '@tonconnect/sdk';
 import { widgetController } from 'src/app/widget-controller';
 import { TonConnectUIError } from 'src/errors/ton-connect-ui.error';
@@ -43,7 +44,11 @@ import { WalletsModalManager } from 'src/managers/wallets-modal-manager';
 import { TransactionModalManager } from 'src/managers/transaction-modal-manager';
 import { WalletsModal, WalletsModalCloseReason, WalletsModalState } from 'src/models/wallets-modal';
 import { isInTMA, sendExpand } from 'src/app/utils/tma-api';
-import { redirectToTelegram, redirectToWallet } from 'src/app/utils/url-strategy-helpers';
+import {
+    redirectToTelegram,
+    redirectToWallet,
+    addSessionIdToUniversalLink
+} from 'src/app/utils/url-strategy-helpers';
 import { SingleWalletModalManager } from 'src/managers/single-wallet-modal-manager';
 import { SingleWalletModal, SingleWalletModalState } from 'src/models/single-wallet-modal';
 import { TonConnectUITracker } from 'src/tracker/ton-connect-ui-tracker';
@@ -438,7 +443,7 @@ export class TonConnectUI {
      */
     public async sendTransaction(
         tx: SendTransactionRequest,
-        options?: ActionConfiguration
+        options?: ActionConfiguration & { onRequestSent?: (redirectToWallet: () => void) => void }
     ): Promise<SendTransactionResponse> {
         this.tracker.trackTransactionSentForSignature(this.wallet, tx);
 
@@ -454,11 +459,14 @@ export class TonConnectUI {
         const { notifications, modals, returnStrategy, twaReturnUrl } =
             this.getModalsAndNotificationsConfiguration(options);
 
+        const sessionId = await this.getSessionId();
+
         widgetController.setAction({
             name: 'confirm-transaction',
             showNotification: notifications.includes('before'),
             openModal: modals.includes('before'),
-            sent: false
+            sent: false,
+            sessionId: sessionId || undefined
         });
 
         const abortController = new AbortController();
@@ -472,13 +480,34 @@ export class TonConnectUI {
                 name: 'confirm-transaction',
                 showNotification: notifications.includes('before'),
                 openModal: modals.includes('before'),
-                sent: true
+                sent: true,
+                sessionId: sessionId || undefined
             });
 
             this.redirectAfterRequestSent({
                 returnStrategy,
-                twaReturnUrl
+                twaReturnUrl,
+                sessionId: sessionId || undefined
             });
+
+            let firstClick = true;
+            const redirectToWallet = async () => {
+                if (abortController.signal.aborted) {
+                    return;
+                }
+
+                const forceRedirect = !firstClick;
+                firstClick = false;
+
+                await this.redirectAfterRequestSent({
+                    returnStrategy,
+                    twaReturnUrl,
+                    forceRedirect,
+                    sessionId: sessionId || undefined
+                });
+            };
+
+            options?.onRequestSent?.(redirectToWallet);
         };
 
         const unsubscribe = this.onTransactionModalStateChange(action => {
@@ -539,7 +568,10 @@ export class TonConnectUI {
      * Signs the data and returns the signature.
      * @param data data to sign.
      */
-    public async signData(data: SignDataPayload): Promise<SignDataResponse> {
+    public async signData(
+        data: SignDataPayload,
+        options?: { onRequestSent?: (redirectToWallet: () => void) => void }
+    ): Promise<SignDataResponse> {
         this.tracker.trackDataSentForSignature(this.wallet, data);
 
         if (!this.connected) {
@@ -554,11 +586,14 @@ export class TonConnectUI {
         const { notifications, modals, returnStrategy, twaReturnUrl } =
             this.getModalsAndNotificationsConfiguration();
 
+        const sessionId = await this.getSessionId();
+
         widgetController.setAction({
             name: 'confirm-sign-data',
             showNotification: notifications.includes('before'),
             openModal: modals.includes('before'),
-            signed: false
+            signed: false,
+            sessionId: sessionId || undefined
         });
 
         const abortController = new AbortController();
@@ -572,13 +607,34 @@ export class TonConnectUI {
                 name: 'confirm-sign-data',
                 showNotification: notifications.includes('before'),
                 openModal: modals.includes('before'),
-                signed: true
+                signed: true,
+                sessionId: sessionId || undefined
             });
 
             this.redirectAfterRequestSent({
                 returnStrategy,
-                twaReturnUrl
+                twaReturnUrl,
+                sessionId: sessionId || undefined
             });
+
+            let firstClick = true;
+            const redirectToWallet = () => {
+                if (abortController.signal.aborted) {
+                    return;
+                }
+
+                const forceRedirect = !firstClick;
+                firstClick = false;
+
+                this.redirectAfterRequestSent({
+                    returnStrategy,
+                    twaReturnUrl,
+                    forceRedirect,
+                    sessionId: sessionId || undefined
+                });
+            };
+
+            options?.onRequestSent?.(redirectToWallet);
         };
 
         const unsubscribe = this.onTransactionModalStateChange(action => {
@@ -635,12 +691,55 @@ export class TonConnectUI {
         }
     }
 
+    /**
+     * Gets the current session ID if available.
+     * @returns session ID string or null if not available.
+     */
+    private async getSessionId(): Promise<string | null> {
+        if (!this.connected) {
+            return null;
+        }
+
+        try {
+            // Try to get session ID from storage as a fallback
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const storage = (this.connector as any).dappSettings?.storage;
+            if (storage) {
+                const stored = await storage.getItem('ton-connect-storage_bridge-connection');
+
+                if (stored) {
+                    const connection = JSON.parse(stored);
+
+                    if (connection.type === 'http' && connection.sessionCrypto) {
+                        // For pending connections
+                        const sessionCrypto = new SessionCrypto(connection.sessionCrypto);
+                        const sessionId = sessionCrypto.sessionId;
+                        return sessionId;
+                    } else if (connection.type === 'http' && connection.session?.sessionKeyPair) {
+                        // For established connections
+                        const sessionCrypto = new SessionCrypto(connection.session.sessionKeyPair);
+                        const sessionId = sessionCrypto.sessionId;
+                        return sessionId;
+                    }
+                }
+            }
+        } catch (e) {
+            // Ignore errors, sessionId will remain null
+        }
+
+        return null;
+    }
+
     private redirectAfterRequestSent({
         returnStrategy,
-        twaReturnUrl
+        twaReturnUrl,
+        forceRedirect,
+        sessionId
     }: {
         returnStrategy: ReturnStrategy;
         twaReturnUrl?: `${string}://${string}`;
+        forceRedirect?: boolean;
+        sessionId?: string;
     }): void {
         if (
             this.walletInfo &&
@@ -648,19 +747,24 @@ export class TonConnectUI {
             (this.walletInfo.openMethod === 'universal-link' ||
                 this.walletInfo.openMethod === 'custom-deeplink')
         ) {
+            const linkWithSessionId = addSessionIdToUniversalLink(
+                this.walletInfo.universalLink,
+                sessionId
+            );
+
             if (isTelegramUrl(this.walletInfo.universalLink)) {
-                redirectToTelegram(this.walletInfo.universalLink, {
+                redirectToTelegram(linkWithSessionId, {
                     returnStrategy,
                     twaReturnUrl: twaReturnUrl || appState.twaReturnUrl,
-                    forceRedirect: false
+                    forceRedirect: forceRedirect || false
                 });
             } else {
                 redirectToWallet(
-                    this.walletInfo.universalLink,
+                    linkWithSessionId,
                     this.walletInfo.deepLink,
                     {
                         returnStrategy,
-                        forceRedirect: false
+                        forceRedirect: forceRedirect || false
                     },
                     () => {}
                 );
@@ -1003,6 +1107,7 @@ export class TonConnectUI {
         }
     }
 
+    // eslint-disable-next-line complexity
     private getModalsAndNotificationsConfiguration(
         options?: ActionConfiguration
     ): StrictActionConfiguration {

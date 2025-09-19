@@ -1,5 +1,5 @@
 /// <reference types="vitest" />
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig({
@@ -9,6 +9,9 @@ export default defineConfig({
         typecheck: {
             tsconfig: './tsconfig.test.json'
         },
-        setupFiles: './tests/setup'
-    },
-})
+        setupFiles: './tests/setup',
+        coverage: {
+            provider: 'istanbul'
+        }
+    }
+});
